@@ -1,0 +1,98 @@
+version 1.0;
+ns junos = "http://xml.juniper.net/junos/*/junos";
+ns xnm = "http://xml.juniper.net/xnm/1.1/xnm";
+ns jcs = "http://xml.juniper.net/junos/commit-scripts/1.0";
+import "../import/junos.xsl";
+
+
+var $arguments = {
+    <argument> {
+        <name> "community";
+        <description> "Community of a VPN";
+    }
+}
+param $community;
+
+match / {
+    <op-script-results> {
+        
+        var $config = jcs:invoke("get-configuration");
+        
+        if (jcs:empty($config/protocols/isis) and jcs:empty($config/protocols/ospf)){
+            <xnm:error> {
+                <message>"NO IGP was found";
+            }
+            call exit-script();
+        }
+        if (jcs:empty($config/protocols/rsvp) and jcs:empty($config/protocols/ldp)){
+            <xnm:error> {
+                <message>"NO labeling protocol was found";
+            }
+            call exit-script();
+        }
+        if (not($config/protocols/bgp//group[type="internal"]/family/inet-vpn)){
+            <xnm:error> {
+                <message>"NO iBGP inet-vpn enabled group was found";
+            }
+            call exit-script();
+        }
+        
+        if (not(jcs:empty($config/protocols/ospf))){
+            <output> "IGP: OSPF\nneighbors status";
+            var $res = jcs:invoke("get-ospf-neighbor-information");
+            for-each($res/ospf-neighbor){
+                <output> neighbor-address _ " : " _ interface-name _ " : " _ ospf-neighbor-state;
+            }
+        }
+        if (not(jcs:empty($config/protocols/isis))){
+            <output> "ISIS LOGIC";
+        }
+        
+        if (not(jcs:empty($config/protocols/ldp))){
+            <output> "\n\nLABELS: LDP\nneighbors status";
+            var $res = jcs:invoke("get-ldp-session-information");
+            for-each($res/ldp-session){
+                <output> ldp-neighbor-address _ " : " _ ldp-session-state;
+            }
+        }
+        if (not(jcs:empty($config/protocols/rsvp))){
+            <output> "LDP LOGIC";
+        }
+        
+        if ($config/protocols/bgp//group[type="internal"]/family/inet-vpn){
+            <output> "\n\nROUTING: BGP";
+            for-each($config/protocols/bgp/group[type="internal"]/family/inet-vpn/../..){
+                <output> "Group " _ name;
+                var $bgpr =  <get-bgp-summary-information> {
+                     <group> ./name;
+                }
+                var $res = jcs:invoke($bgpr);
+                <output> "Peer                     AS      InPkt     OutPkt    OutQ   Flaps Last Up/Dwn State|#Active/Received/Accepted/Damped...";
+                <bgp-information> {
+                    for-each ($res/bgp-peer){
+                        <bgp-peer junos:style="terse">{
+                            copy-of ./*;
+                        }
+                    }
+                }
+                <output> "\n";
+            }
+        }
+        
+        if(not(jcs:empty($community))){
+            <output> jcs:printf("\n\nVPN routes tagged with community %s", $community);
+            var $router =  <get-route-information> {
+                <community> $community;
+                <table> "bgp.l3vpn.0";
+            }
+            var $res = jcs:invoke($router);
+            for-each ($res/route-table/rt){
+                <output> "\tVPN ROUTE: " _ rt-destination _ "/" _ rt-prefix-length _ " from " _ rt-entry/learned-from;
+            }
+        }
+    }
+}
+
+template exit-script(){
+    <xsl:message terminate="yes"> "Script aborted";
+}
